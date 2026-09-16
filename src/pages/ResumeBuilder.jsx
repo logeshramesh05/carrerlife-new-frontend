@@ -54,12 +54,12 @@ function ResumeDoc({ p }) {
             <Text style={S.sec}>Skills</Text><View style={S.secRule} />
             {hasGrouped ? (
               <>
-                {sg.languages?.length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>Languages: </Text>{sg.languages.join(", ")}</Text>}
-                {sg.backend?.length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>Backend and Architecture: </Text>{sg.backend.join(", ")}</Text>}
-                {sg.databases?.length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>Databases: </Text>{sg.databases.join(", ")}</Text>}
-                {sg.devops?.length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>DevOps / Testing: </Text>{sg.devops.join(", ")}</Text>}
-                {sg.tools?.length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>Tools and CI/CD Pipelines: </Text>{sg.tools.join(", ")}</Text>}
-                {sg.concepts?.length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>Core Concepts: </Text>{sg.concepts.join(", ")}</Text>}
+                {sg.languages?.filter(Boolean).length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>Languages: </Text>{sg.languages.filter(Boolean).join(", ")}</Text>}
+                {sg.backend?.filter(Boolean).length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>Backend and Architecture: </Text>{sg.backend.filter(Boolean).join(", ")}</Text>}
+                {sg.databases?.filter(Boolean).length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>Databases: </Text>{sg.databases.filter(Boolean).join(", ")}</Text>}
+                {sg.devops?.filter(Boolean).length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>DevOps / Testing: </Text>{sg.devops.filter(Boolean).join(", ")}</Text>}
+                {sg.tools?.filter(Boolean).length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>Tools and CI/CD Pipelines: </Text>{sg.tools.filter(Boolean).join(", ")}</Text>}
+                {sg.concepts?.filter(Boolean).length > 0 && <Text style={S.skillRow}><Text style={S.skillCat}>Core Concepts: </Text>{sg.concepts.filter(Boolean).join(", ")}</Text>}
               </>
             ) : (
               <Text style={S.skillRow}>{(p.skills || []).join("  •  ")}</Text>
@@ -266,8 +266,30 @@ export default function ResumeBuilder() {
   }, []);
 
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
-  const setSG = (key, val) => setForm((f) => ({ ...f, skillGroups: { ...f.skillGroups, [key]: val.split(",").map((s) => s.trim()).filter(Boolean) } }));
-  const sgString = (arr) => (arr || []).join(", ");
+  const setSG = (key, val) => setForm((f) => {
+    // Allow typing commas without losing the trailing ", " while editing.
+    // Example: "java," should display as "java, " not "java", so the user can continue typing "python".
+    if (!val.trim()) return { ...f, skillGroups: { ...f.skillGroups, [key]: [] } };
+    const endsWithComma = val.trimEnd().endsWith(",");
+    const parts = val.split(",").map((s) => s.trim());
+    let arr = parts.filter(Boolean);
+    // Keep a sentinel empty string when user ends with comma so join(", ") renders trailing ", "
+    if (endsWithComma) arr = [...arr, ""];
+    // Remove duplicate sentinel handling for display purposes but keep array valid for preview (filter empty for preview)
+    // For state we filter empty except sentinel, preview will filter empty anyway
+    if (arr.length && arr[arr.length - 1] === "") {
+      // sentinel: keep as ["java",""] to show "java, "
+      return { ...f, skillGroups: { ...f.skillGroups, [key]: arr } };
+    }
+    return { ...f, skillGroups: { ...f.skillGroups, [key]: arr } };
+  });
+  const sgString = (arr) => {
+    if (!arr || !arr.length) return "";
+    // sentinel "" at end means trailing comma still being typed
+    if (arr.length === 1 && arr[0] === "") return "";
+    if (arr[arr.length - 1] === "") return arr.slice(0, -1).join(", ") + ", ";
+    return arr.join(", ");
+  };
   const setExp = (i, patch) => setForm((f) => ({ ...f, experience: f.experience.map((e, j) => j === i ? { ...e, ...patch } : e) }));
   const setProj = (i, patch) => setForm((f) => ({ ...f, projects: f.projects.map((p, j) => j === i ? { ...p, ...patch } : p) }));
   const setEdu = (i, patch) => setForm((f) => ({ ...f, education: f.education.map((e, j) => j === i ? { ...e, ...patch } : e) }));
@@ -302,9 +324,22 @@ export default function ResumeBuilder() {
   };
 
   const addFlatSkill = (raw) => {
-    const v = (raw ?? "").trim().replace(/\s+/g, " ");
-    if (!v) return;
-    setForm((f) => f.skills.some((s) => s.toLowerCase() === v.toLowerCase()) ? f : { ...f, skills: [...f.skills, v].slice(0, 60) });
+    if (!raw) return;
+    // Support comma-separated input: "java, python, go" -> adds 3 chips at once (fixes bug where "java, python" became single chip "java, python" / lost after comma)
+    const parts = raw
+      .split(",")
+      .map((s) => s.trim().replace(/\s+/g, " "))
+      .filter(Boolean);
+    if (!parts.length) return;
+    setForm((f) => {
+      let next = [...f.skills];
+      for (const p of parts) {
+        if (p.length > 120) continue;
+        if (!next.some((s) => s.toLowerCase() === p.toLowerCase())) next.push(p);
+        if (next.length >= 60) break;
+      }
+      return { ...f, skills: next.slice(0, 60) };
+    });
     setSkillInput("");
   };
 
@@ -417,7 +452,13 @@ export default function ResumeBuilder() {
             ))}
             <div className="field"><label>Additional flat skills (chips)</label>
               <div className="skill-add-row">
-                <input value={skillInput} onChange={(e) => setSkillInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addFlatSkill(skillInput); } }} placeholder="Type a skill, press Enter" maxLength={120} />
+                <input value={skillInput} onChange={(e) => setSkillInput(e.target.value)} onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    // if comma typed, add whatever is before comma immediately
+                    addFlatSkill(skillInput);
+                  }
+                }} placeholder="Type a skill and press Enter or comma — e.g. java, python" maxLength={120} />
                 <button type="button" onClick={() => addFlatSkill(skillInput)}>Add</button>
               </div>
               {suggestions.length > 0 && (
@@ -562,12 +603,12 @@ export default function ResumeBuilder() {
             <div className="rp-contacts">{[form.location, form.headline, ...form.links.filter((l) => l.url.trim()).map((l) => `${l.label || "Link"}: ${l.url}`)].filter(Boolean).join("  |  ") || "Links and headline appear here"}</div>
             <div className="rp-rule" />
             {!!form.summary && (<><div className="rp-sec">Executive Summary</div><p>{form.summary}</p></>)}
-            {(Object.values(form.skillGroups).some((v) => v.length) || form.skills.length) && (
+            {(Object.values(form.skillGroups).some((v) => v.filter(Boolean).length) || form.skills.length) && (
               <><div className="rp-sec">Skills</div>
-                {Object.entries({ Languages: form.skillGroups.languages, "Backend and Architecture": form.skillGroups.backend, Databases: form.skillGroups.databases, "DevOps / Testing": form.skillGroups.devops, "Tools and CI/CD Pipelines": form.skillGroups.tools, "Core Concepts": form.skillGroups.concepts }).filter(([, v]) => v.length).map(([k, v]) => (
-                  <div key={k} className="rp-skill-row"><strong>{k}:</strong> {v.join(", ")}</div>
+                {Object.entries({ Languages: form.skillGroups.languages, "Backend and Architecture": form.skillGroups.backend, Databases: form.skillGroups.databases, "DevOps / Testing": form.skillGroups.devops, "Tools and CI/CD Pipelines": form.skillGroups.tools, "Core Concepts": form.skillGroups.concepts }).filter(([, v]) => v.filter(Boolean).length).map(([k, v]) => (
+                  <div key={k} className="rp-skill-row"><strong>{k}:</strong> {v.filter(Boolean).join(", ")}</div>
                 ))}
-                {form.skills.length > 0 && !Object.values(form.skillGroups).some((v) => v.length) && <p>{form.skills.join("  •  ")}</p>}
+                {form.skills.length > 0 && !Object.values(form.skillGroups).some((v) => v.filter(Boolean).length) && <p>{form.skills.join("  •  ")}</p>}
               </>
             )}
             {form.experience.some((e) => e.title.trim() || e.company.trim()) && (
